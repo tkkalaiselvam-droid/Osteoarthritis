@@ -515,12 +515,13 @@ const questionKeys = ['painWalking', 'painStairs', 'morningStiff', 'jointGrind',
 const scaleKeys = ['none', 'mild', 'moderate', 'severe', 'extreme'];
 
 function App() {
-  const [screen, setScreen] = useState<any>('login');
+  const [screen, setScreen] = useState<Screen>('login');
   const [lang, setLang] = useState<Lang>('en');
   const [patients, setPatients] = useState(initialPatients);
   const [patient, setPatient] = useState({ name: '', age: '62', gender: 'F', phone: '', district: 'Kamrup Metropolitan', state: 'Assam' });
   const [consented, setConsented] = useState(false);
   const [hasSignature, setHasSignature] = useState(false);
+  const [pin, setPin] = useState('');
   const [answers, setAnswers] = useState<number[]>([0, 0, 0, 0, 0]);
   const [sensorConnected, setSensorConnected] = useState(false);
   const [kneeAngle, setKneeAngle] = useState(0);
@@ -546,19 +547,17 @@ function App() {
     setMenuOpen(false);
     window.scrollTo({ top: 0, behavior: 'smooth' });
 
-    // Trigger FastAPI whenever navigating to the report screen
-    if (next === 'report' || next === 'results') {
-      KneeSenseAPI.submitAssessment(patient.name || "PAT-2026-8831", null, {
-        Q_BASE_1: answers[0]?.toString() || "Stiffness",
-        Q_BASE_2: answers[1]?.toString() || "Pain during walking",
-        Q_AI_CONTEXT_1: answers[2]?.toString() || "Severe stiffness"
-      })
-      .then((data) => {
-        console.log("✅ Live Response from FastAPI:", data);
-      })
-      .catch((err) => {
-        console.error("❌ Submission Error:", err);
-      });
+    // Trigger FastAPI whenever navigating to the result screen
+    if (next === 'result') {
+      const formData = new FormData();
+      formData.append('patient_id', patient.name || 'PAT-2026-8831');
+      formData.append('q1_answer', answers[0]?.toString() || 'Stiffness');
+      formData.append('q2_answer', answers[1]?.toString() || 'Pain during walking');
+      formData.append('q3_answer', answers[2]?.toString() || 'Severe stiffness');
+      fetch('http://127.0.0.1:8000/api/assessments/process', { method: 'POST', body: formData })
+        .then((res: Response) => res.json())
+        .then((data: unknown) => { console.log('Live response from FastAPI:', data); })
+        .catch((err: unknown) => { console.error('Submission error:', err); });
     }
   };
 
@@ -724,7 +723,7 @@ function Dashboard({ patients, onNew, onSync, onPatient, t, syncCount, lang }: {
                   <div className="patient-avatar">{item.name.split(' ').map((n) => n[0]).join('').slice(0, 2)}</div>
                   <div><strong>{item.name}</strong><small>{item.id} · {item.age} {t('yrs')} · {item.area}</small></div>
                 </div>
-                <span className={`status-chip ${item.status.toLowerCase().replaceAll(' ', '-')}`}>{t(statusKey(item.status))}</span>
+                <span className={`status-chip ${item.status.toLowerCase().replace(/ /g, '-')}`}>{t(statusKey(item.status))}</span>
                 <span className={`risk-pill ${item.risk.toLowerCase()}`}>{t(riskKey(item.risk))}<small>{item.score}/100</small></span>
                 <SyncBadge status={item.synced} t={t} />
                 <ChevronDown className="row-arrow" size={18} />
@@ -813,7 +812,7 @@ function Consent({ consented, setConsented, hasSignature, setHasSignature, onBac
           <div className="dpdp-block">
             <div className="dpdp-header"><PenLine size={18} /><span className="eyebrow">{t('dpdpConsent')}</span></div>
             <p>{t('dpdpBody')}</p>
-            <SignaturePad onSignatureChange={setHasSignature} t={t} />
+            <SignaturePad hasSignature={hasSignature} onSignatureChange={setHasSignature} t={t} />
           </div>
           <label className={`consent-check ${consented ? 'checked' : ''}`}>
             <input type="checkbox" checked={consented} onChange={(e) => setConsented(e.target.checked)} />
@@ -827,7 +826,7 @@ function Consent({ consented, setConsented, hasSignature, setHasSignature, onBac
   );
 }
 
-function SignaturePad({ onSignatureChange, t }: { onSignatureChange: (hasInk: boolean) => void; t: (k: string) => string }) {
+function SignaturePad({ hasSignature, onSignatureChange, t }: { hasSignature: boolean; onSignatureChange: (hasInk: boolean) => void; t: (k: string) => string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawing = useRef(false);
   const last = useRef<{ x: number; y: number } | null>(null);
@@ -1190,29 +1189,25 @@ function PdfScreen({ patient, score, risk, onBack, onReturn, t }: { patient: { n
   );
 }
 
-function SyncScreen({ patients, setPatients, networkOnline, setNetworkOnline, onBack, t }: { patients: any[]; setPatients: any; networkOnline: boolean; setNetworkOnline: any; onBack: () => void; t: any }) {
+function SyncScreen({ patients, setPatients, networkOnline, setNetworkOnline, onBack, t }: { patients: Patient[]; setPatients: React.Dispatch<React.SetStateAction<Patient[]>>; networkOnline: boolean; setNetworkOnline: (v: boolean) => void; onBack: () => void; t?: (k: string) => string }) {
+  const translate = (key: string) => (typeof t === 'function' ? t(key) : key);
   const [syncing, setSyncing] = useState(false);
   const pending = patients.filter((p) => p.synced !== 'synced').length;
 
   const syncAll = async () => {
     setSyncing(true);
     try {
-      const response = await fetch("http://127.0.0.1:8000/api/assessments/process", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          patient_id: "PAT-2026-8831",
-          q1_answer: "Morning stiffness present",
-          q2_answer: "Pain while walking",
-          q3_answer: "Knee swelling reported"
-        })
-      });
-      const data = await response.json();
-      console.log("✅ Live API Response from FastAPI:", data);
-
-      setPatients((prev: any[]) => prev.map((p) => ({ ...p, synced: 'synced' as const })));
-    } catch (err) {
-      console.error("❌ Sync error:", err);
+      const formData = new FormData();
+      formData.append('patient_id', 'PAT-2026-8831');
+      formData.append('q1_answer', 'Morning stiffness present');
+      formData.append('q2_answer', 'Pain while walking');
+      formData.append('q3_answer', 'Knee swelling reported');
+      const response = await fetch('http://127.0.0.1:8000/api/assessments/process', { method: 'POST', body: formData });
+      const data: unknown = await response.json();
+      console.log('Live API response from FastAPI:', data);
+      setPatients((prev: Patient[]) => prev.map((p) => ({ ...p, synced: 'synced' as SyncStatus })));
+    } catch (err: unknown) {
+      console.error('Sync error:', err);
     } finally {
       setSyncing(false);
     }
@@ -1221,23 +1216,40 @@ function SyncScreen({ patients, setPatients, networkOnline, setNetworkOnline, on
   return (
     <main className="page">
       <div className="page-inner narrow">
-        <div className="card">
-          <h2>Sync Center</h2>
-          <p>Pending Patients: {pending}</p>
-          <button 
-            className="btn btn-primary" 
-            onClick={syncAll} 
-            disabled={syncing}
-          >
-            {syncing ? "Syncing..." : "Sync All Data"}
-          </button>
+        <div className="sync-hero">
+          <div className="sync-orbit"><Cloud size={32} /><span>{pending}</span></div>
+          <div><span className="eyebrow">{translate('dataManagement')}</span><h2>{translate('syncCenterTitle')}</h2><p>{translate('syncBody')}</p></div>
         </div>
+        <div className="sync-controls">
+          <div className="network-toggle">
+            <div className={`network-icon ${networkOnline ? '' : 'offline'}`}>{networkOnline ? <Network size={20} /> : <WifiOff size={20} />}</div>
+            <div><strong>{networkOnline ? translate('onlineStable') : translate('offlinePaused')}</strong><span>{networkOnline ? translate('connectionGood') : translate('offlineWait')}</span></div>
+            <button className={`toggle ${networkOnline ? 'on' : ''}`} onClick={() => setNetworkOnline(!networkOnline)}><span /></button>
+          </div>
+          <button className="primary-button full" onClick={syncAll} disabled={syncing}><RefreshCw size={18} className={syncing ? 'spin' : ''} />{syncing ? translate('syncing') : translate('forceSync')}</button>
+        </div>
+        <div className="sync-list">
+          {patients.map((p) => <SyncRow key={p.id} patient={p} t={t} />)}
+        </div>
+        <div className="sync-note"><LockKeyhole size={16} /><div><strong>{translate('privateQueue')}</strong><p>{translate('privateBody')}</p></div></div>
       </div>
     </main>
   );
 }
 
-function BottomNav({ active, onNavigate, t }: { active: string; onNavigate: (s: any) => void; t?: any }) {
+function SyncRow({ patient, t }: { patient: Patient; t?: (k: string) => string }) {
+  const translate = (key: string) => (typeof t === 'function' ? t(key) : key);
+  const syncKey = (s: SyncStatus) => (s === 'synced' ? 'synced' : s === 'pending' ? 'pending' : 'failed');
+  return (
+    <div className="sync-row">
+      <div className="patient-avatar">{patient.name.split(' ').map((n) => n[0]).join('').slice(0, 2)}</div>
+      <div><strong>{patient.name}</strong><small>{patient.id} · {translate(syncKey(patient.synced))}</small></div>
+      <span className={`sync-badge ${patient.synced}`}><span />{translate(syncKey(patient.synced))}</span>
+    </div>
+  );
+}
+
+function BottomNav({ active, onNavigate, t }: { active: string; onNavigate: (s: Screen) => void; t?: (k: string) => string }) {
   const translate = (key: string) => (typeof t === 'function' ? t(key) : key);
 
   return (
